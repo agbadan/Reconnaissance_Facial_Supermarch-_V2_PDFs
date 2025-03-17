@@ -74,4 +74,4 @@ with gr.Blocks() as demo:
             refresh_btn.click(fn=refresh_person_ids, inputs=[], outputs=person_dropdown)
             download_btn.click(fn=download_receipts_gradio, inputs=person_dropdown, outputs=download_output)
 
-demo.launch(debug=True)
+demo.launch(debug=True, share=True)
