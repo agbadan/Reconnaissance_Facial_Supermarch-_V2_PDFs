@@ -17,7 +17,7 @@ from face_tracker import FaceTracker
 # --- Gestion de ByteTrack --- 
 # Ajout du dossier ByteTrack dans sys.path pour accéder aux modules (nets, utils, etc.)
 import sys
-bytrack_path = os.path.join(os.getcwd(), "bytrack")
+bytrack_path = os.path.join(os.getcwd(), "ByteTrack")
 if bytrack_path not in sys.path:
     sys.path.append(bytrack_path)
 
