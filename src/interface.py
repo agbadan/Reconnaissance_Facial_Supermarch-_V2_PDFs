@@ -33,6 +33,12 @@ from nets import nn       # Module de ByteTrack
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
 # ---------------------------
+# Chargement de la base d'images persistante
+# ---------------------------
+face_db_obj = FaceDatabase(DATABASE_PATH)
+face_db_persistent = face_db_obj.faces_db  # Base partagée entre les modes
+
+# ---------------------------
 # Fonctions utilitaires
 # ---------------------------
 def get_person_ids() -> list:
@@ -92,7 +98,7 @@ face_mesh_rt = mp_face_mesh_rt.FaceMesh(
 )
 
 # Chargement du modèle YOLO pour le temps réel et initialisation de ByteTrack
-model_rt = torch.load('./weights/v8_n.pt', map_location='cuda')['model'].float()
+model_rt = torch.load('/content/Reconnaissance_Facial_Supermarch-_V2_PDFs/ByteTrack/weights/v8_n.pt', map_location='cuda')['model'].float()
 model_rt.eval()
 model_rt.half()
 bytetrack_rt = nn.BYTETracker(30)  # On fixe 30 fps pour ByteTrack
@@ -102,37 +108,35 @@ last_time_rt = 0
 last_output_rt = None
 gallery_rt = []  # Galerie locale pour stocker les visages détectés
 
-# Global pour la reconnaissance des visages en temps réel :
+# Pour la reconnaissance en temps réel, on charge InsightFace et instancie le FaceTracker
 from insightface.app import FaceAnalysis
 face_app_rt = FaceAnalysis(name="buffalo_l", providers=["CUDAExecutionProvider"])
 face_app_rt.prepare(ctx_id=0, det_size=(640, 640))
-# Instanciation d'un tracker pour la reconnaissance
+
 from face_tracker import FaceTracker
 face_tracker_rt = FaceTracker(similarity_threshold=SIMILARITY_THRESHOLD)
-face_db_rt = {}  # Base de visages locale pour le temps réel
+# On partage la base persistante entre les modes
+face_db_rt = face_db_persistent
 
 def process_realtime_detection(frame):
     """
     Traite une frame de la webcam en temps réel :
-      - Ne traite qu'une frame par seconde.
-      - Utilise Mediapipe pour vérifier l'orientation du visage.
-      - Applique le pipeline YOLO/ByteTrack pour détecter les visages.
-      - Pour chaque visage détecté, extrait la région du visage,
-        effectue une reconnaissance via InsightFace et met à jour le tracker.
-      - Le visage est ensuite sauvegardé via save_detected_face et ajouté à une galerie (max 10 images).
+      - Traite au maximum une frame par seconde.
+      - Vérifie l'orientation via Mediapipe mais, même si les conditions ne sont pas parfaitement remplies,
+        le pipeline YOLO/ByteTrack est exécuté.
+      - Pour chaque visage détecté, extrait uniquement la région du visage, réalise la reconnaissance via InsightFace,
+        et met à jour le tracker en utilisant la base partagée.
+      - Le visage est ensuite sauvegardé via save_detected_face et ajouté à la galerie.
     Retourne un tuple (frame annotée, galerie des visages détectés).
     """
-    global last_time_rt, last_output_rt, gallery_rt, face_mesh_rt, model_rt, bytetrack_rt
-    global face_app_rt, face_tracker_rt, face_db_rt
-
-    # Créer une copie modifiable de la frame
+    global last_time_rt, last_output_rt, gallery_rt, face_db_rt
     frame = frame.copy()
     current_time = time.time()
     if current_time - last_time_rt < 1:
         return last_output_rt if last_output_rt is not None else frame, gallery_rt
     last_time_rt = current_time
 
-    # 1. Détection par Mediapipe FaceMesh
+    # 1. Détection via Mediapipe FaceMesh
     frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     results = face_mesh_rt.process(frame_rgb)
     if results.multi_face_landmarks:
@@ -155,14 +159,12 @@ def process_realtime_detection(frame):
             if (abs(roll - DESIRED_ROLL) > ANGLE_TOLERANCE or
                 abs(pitch - DESIRED_PITCH) > ANGLE_TOLERANCE or
                 abs(yaw - DESIRED_YAW) > ANGLE_TOLERANCE):
-                last_output_rt = frame
-                return frame, gallery_rt
+                logging.info("Angles non optimaux, mais on continue le traitement.")
+                # On ne retourne pas ici pour permettre l'exécution du pipeline YOLO.
         else:
-            last_output_rt = frame
-            return frame, gallery_rt
+            logging.info("Nombre insuffisant de landmarks, on continue quand même.")
     else:
-        last_output_rt = frame
-        return frame, gallery_rt
+        logging.info("Aucun landmark détecté, on continue.")
 
     # 2. Prétraitement pour YOLO et détection avec ByteTrack
     image = frame.copy()
@@ -199,10 +201,10 @@ def process_realtime_detection(frame):
         obj_classes = outputs_bt[:, 6]
         for i, box in enumerate(boxes_bt):
             if int(obj_classes[i]) != 0:
-                continue  # Ne traiter que la classe "personne"
+                continue  # On ne traite que la classe "personne"
             x1, y1, x2, y2 = list(map(int, box))
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            # Extraction de la région de visage
+            # Extraction du face crop uniquement
             face_roi = frame[y1:y2, x1:x2]
             if face_roi.size != 0:
                 try:
@@ -211,7 +213,7 @@ def process_realtime_detection(frame):
                     logging.error(f"Erreur lors de l'analyse du visage : {e}")
                     detected_faces = []
                 if detected_faces:
-                    # Met à jour le suivi avec le tracker et la base de visages locale
+                    # Mise à jour du tracker avec la base persistante
                     _, logs_tracker = face_tracker_rt.update(detected_faces, int(outputs_bt[i, 4]), face_db_rt, "", 0)
                     unique_id = detected_faces[0].assigned_label
                 else:
@@ -242,7 +244,7 @@ with gr.Blocks() as demo:
                               inputs=video_input,
                               outputs=[logs_output, gallery_output, updated_dropdown])
         with gr.TabItem("Détection en temps réel"):
-            realtime_img = gr.Image(sources=["webcam"], streaming=True, label="Flux en temps réel")
+            realtime_img = gr.Image(sources="webcam", streaming=True, label="Flux en temps réel")
             realtime_gallery = gr.Gallery(label="Galerie des visages détectés")
             realtime_img.stream(fn=process_realtime_detection,
                                 inputs=realtime_img,
