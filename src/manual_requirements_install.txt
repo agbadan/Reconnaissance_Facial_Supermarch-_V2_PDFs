@@ -1,0 +1,24 @@
+# 1: INSTALLER LES BIBLIOTHEQUES NECESSAIRES POUR LA RECONNAISSANCE FACIALE
+# 1: INSTALLER LES BIBLIOTHEQUES NECESSAIRES POUR LA RECONNAISSANCE FACIALE
+#!pip install tensorflow
+!pip install onnxruntime
+!pip install insightface
+!pip install onnxruntime-gpu
+
+!pip install opencv-python opencv-python-headless numpy
+!pip install retina-face
+!pip install gradio
+!pip install mediapipe
+!pip install reportlab
+
+!pip install pytorch torchvision torchaudio
+!pip install facenet-pytorch
+#!git clone https://github.com/jahongir7174/ByteTrack
+
+#/content/drive/MyDrive/AI_Reconnaisance_Visages_Test_2/
+#/content/ByteTrack
+
+#Copier Bytrack dans mon drive
+#!cp -r /content/ByteTrack* /content/drive/MyDrive/AI_Reconnaisance_Visages_Test_2/
+
+!pip install lap
