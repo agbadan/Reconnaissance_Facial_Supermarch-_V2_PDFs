@@ -21,7 +21,7 @@ from config import (
     DEFAULT_LOG_ACHAT,
     DEFAULT_LOG_TRAITE,
     DETECTION_SIZE,
-    SIMILARITY_THRESHOLD,
+    SIMILARITY_THRESHOLD,  # Pensez à augmenter ce seuil si nécessaire
     RECEIPT_NUMBER_FILE,
     DESIRED_ROLL,
     DESIRED_PITCH,
@@ -35,15 +35,11 @@ from nets import nn       # Module de ByteTrack
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
 # ---------------------------
-# Chargement de la base d'images persistante
+# Création d'une instance unique de la base persistante
 # ---------------------------
 face_db_obj = FaceDatabase(DATABASE_PATH)
-face_db_persistent = face_db_obj.faces_db  # Base partagée entre les modes
-
-# ---------------------------
-# Variables globales pour les logs temps réel
-# ---------------------------
-rt_logs_history = []  # Historique persistant des logs
+# Cette instance sera utilisée pour les mises à jour en temps réel et lors de l'upload
+face_db_shared = face_db_obj.faces_db
 
 # ---------------------------
 # Fonctions utilitaires
@@ -59,8 +55,8 @@ def refresh_person_ids() -> gr.update:
 
 def process_video_gradio(video_file) -> tuple:
     video_path = video_file.name if hasattr(video_file, "name") else video_file
-    face_db_obj = FaceDatabase(DATABASE_PATH)
-    face_db = face_db_obj.faces_db
+    # Utilisation de la même instance de base persistante
+    face_db = face_db_shared
 
     config = {"SIMILARITY_THRESHOLD": SIMILARITY_THRESHOLD}
     processor = VideoProcessor(
@@ -69,6 +65,7 @@ def process_video_gradio(video_file) -> tuple:
     )
     logs_list, gallery = processor.process(face_db)
 
+    # Mise à jour et sauvegarde de la base persistante
     face_db_obj.faces_db = face_db
     face_db_obj.save()
 
@@ -111,7 +108,7 @@ face_mesh_rt = mp_face_mesh_rt.FaceMesh(
 )
 
 # Chargement du modèle YOLO pour le temps réel et initialisation de ByteTrack
-model_rt = torch.load('/content/Reconnaissance_Facial_Supermarch-_V2_PDFs/ByteTrack/weights/v8_n.pt', map_location='cuda')['model'].float()
+model_rt = torch.load('./weights/v8_n.pt', map_location='cuda')['model'].float()
 model_rt.eval()
 model_rt.half()
 bytetrack_rt = nn.BYTETracker(30)  # On fixe 30 fps pour ByteTrack
@@ -127,13 +124,17 @@ face_app_rt = FaceAnalysis(name="buffalo_l", providers=["CUDAExecutionProvider"]
 face_app_rt.prepare(ctx_id=0, det_size=(640, 640))
 
 from face_tracker import FaceTracker
+# Utilisation de la même base persistante partagée
 face_tracker_rt = FaceTracker(similarity_threshold=SIMILARITY_THRESHOLD)
-# On partage la même base persistante que pour le mode vidéo
-face_db_rt = face_db_persistent
+# On assigne la référence partagée à l'instance du tracker
+face_db_rt = face_db_shared
 
 # Variable pour limiter la fréquence d'appel à la génération des reçus
 last_receipt_generation_rt = 0
 RECEIPT_GEN_INTERVAL = 5  # en secondes
+
+# Historique persistant des logs en temps réel
+rt_logs_history = []
 
 def process_realtime_detection(frame):
     """
@@ -224,7 +225,7 @@ def process_realtime_detection(frame):
                 continue  # Ne traiter que la classe "personne"
             x1, y1, x2, y2 = list(map(int, box))
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            # Extraction du face crop uniquement
+            # Extraction du face crop
             face_roi = frame[y1:y2, x1:x2]
             if face_roi.size != 0:
                 try:
@@ -233,7 +234,7 @@ def process_realtime_detection(frame):
                     rt_logs.append(f"Erreur lors de l'analyse du visage : {e}")
                     detected_faces = []
                 if detected_faces:
-                    # Mise à jour du tracker avec la base persistante
+                    # Mise à jour du tracker avec la base partagée
                     _, logs_tracker = face_tracker_rt.update(detected_faces, int(outputs_bt[i, 4]), face_db_rt, "", 0)
                     for log in logs_tracker:
                         rt_logs.append(log)
@@ -242,12 +243,15 @@ def process_realtime_detection(frame):
                 else:
                     unique_id = "unknown"
                     rt_logs.append("Aucun visage reconnu, identifiant 'unknown'")
-                # Sauvegarder uniquement la région du visage
+                # Sauvegarde de la région du visage et mise à jour de la base persistante
                 filename, save_path = save_detected_face(face_roi, unique_id, FACE_SAVE_FOLDER)
                 rt_logs.append(f"Face saved: {filename} at {save_path}")
                 gallery_rt.append(face_roi)
                 if len(gallery_rt) > 10:
                     gallery_rt.pop(0)
+                # Synchronisation immédiate de la base partagée
+                face_db_obj.faces_db = face_db_rt
+                face_db_obj.save()
     
     # Appel périodique à la génération des reçus (toutes les 5 secondes)
     if time.time() - last_receipt_generation_rt > RECEIPT_GEN_INTERVAL:
@@ -289,7 +293,7 @@ with gr.Blocks() as demo:
                               inputs=video_input,
                               outputs=[logs_output, gallery_output, updated_dropdown])
         with gr.TabItem("Détection en temps réel"):
-            realtime_img = gr.Image(sources="webcam", streaming=True, label="Flux en temps réel")
+            realtime_img = gr.Image(source="webcam", streaming=True, label="Flux en temps réel")
             realtime_gallery = gr.Gallery(label="Galerie des visages détectés")
             rt_logs_output = gr.Textbox(label="Logs détection temps réel", lines=8)
             realtime_img.stream(fn=process_realtime_detection,
@@ -302,5 +306,5 @@ with gr.Blocks() as demo:
             download_output = gr.File(label="Fichier ZIP des reçus")
             refresh_btn.click(fn=refresh_person_ids, inputs=[], outputs=person_dropdown)
             download_btn.click(fn=download_receipts_gradio, inputs=person_dropdown, outputs=download_output)
- 
+
 demo.launch(debug=True, share=True)
