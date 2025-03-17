@@ -10,6 +10,7 @@ import zipfile
 from datetime import datetime
 from tqdm import tqdm
 import mediapipe as mp
+from face_saver import save_detected_face
 
 from helpers import ensure_directory_exists
 from face_tracker import FaceTracker
@@ -17,7 +18,7 @@ from face_tracker import FaceTracker
 # --- Gestion de ByteTrack --- 
 # Ajout du dossier ByteTrack dans sys.path pour accéder aux modules (nets, utils, etc.)
 import sys
-bytrack_path = os.path.join(os.getcwd(), "ByteTrack")
+bytrack_path = os.path.join(os.getcwd(), "/content/Reconnaissance_Facial_Supermarch-_V2_PDFs/ByteTrack")
 if bytrack_path not in sys.path:
     sys.path.append(bytrack_path)
 
@@ -56,7 +57,7 @@ class VideoProcessor:
         self.candidates_by_person = {}
 
         # Chargement du modèle YOLO
-        self.model = torch.load('./weights/v8_n.pt', map_location='cuda')['model'].float()
+        self.model = torch.load('/content/Reconnaissance_Facial_Supermarch-_V2_PDFs/ByteTrack/weights/v8_n.pt', map_location='cuda')['model'].float()
         self.model.eval()
         self.model.half()
 
@@ -216,16 +217,15 @@ class VideoProcessor:
             person_folder = os.path.join(self.face_save_folder, unique_id)
             ensure_directory_exists(person_folder)
             for candidate in best_candidates:
-                score, face_crop = candidate
-                filename = self.generate_face_filename(unique_id)
-                save_path = os.path.join(person_folder, filename)
-                cv2.imwrite(save_path, face_crop)
-                self.log_new_person(filename)
-                log_msg = f"Visage pour {unique_id} sauvegardé dans {save_path} (score: {score:.2f})."
-                self.processing_logs.append(log_msg)
-                logging.info(log_msg)
-                face_rgb = cv2.cvtColor(face_crop, cv2.COLOR_BGR2RGB)
-                self.detection_gallery.append((face_rgb, log_msg))
+              score, face_crop = candidate
+              # Sauvegarder le visage en appelant la fonction commune
+              filename, save_path = save_detected_face(face_crop, unique_id, self.face_save_folder)
+              self.log_new_person(filename)
+              log_msg = f"Visage pour {unique_id} sauvegardé dans {save_path} (score: {score:.2f})."
+              self.processing_logs.append(log_msg)
+              logging.info(log_msg)
+              face_rgb = cv2.cvtColor(face_crop, cv2.COLOR_BGR2RGB)
+              self.detection_gallery.append((face_rgb, log_msg))
 
         self.log_achat.close()
         self.log_traite.close()
