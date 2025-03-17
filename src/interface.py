@@ -41,6 +41,11 @@ face_db_obj = FaceDatabase(DATABASE_PATH)
 face_db_persistent = face_db_obj.faces_db  # Base partagée entre les modes
 
 # ---------------------------
+# Variables globales pour les logs temps réel
+# ---------------------------
+rt_logs_history = []  # Historique persistant des logs
+
+# ---------------------------
 # Fonctions utilitaires
 # ---------------------------
 def get_person_ids() -> list:
@@ -140,15 +145,15 @@ def process_realtime_detection(frame):
         et met à jour le tracker en utilisant la base partagée.
       - Le visage est sauvegardé via save_detected_face et ajouté à la galerie.
       - Périodiquement, déclenche la génération des reçus.
-      - Des logs détaillés sont générés pour informer l'utilisateur.
-    Retourne un tuple (frame annotée, galerie des visages détectés, logs de détection).
+      - Les logs détaillés sont ajoutés à un historique persistant pour l'affichage.
+    Retourne un tuple (frame annotée, galerie des visages détectés, logs persistant).
     """
-    global last_time_rt, last_output_rt, gallery_rt, face_db_rt, last_receipt_generation_rt
-    rt_logs = []  # liste des logs pour cette frame
+    global last_time_rt, last_output_rt, gallery_rt, face_db_rt, last_receipt_generation_rt, rt_logs_history
+    rt_logs = []  # logs de cette frame
     frame = frame.copy()
     current_time = time.time()
     if current_time - last_time_rt < 1:
-        return last_output_rt if last_output_rt is not None else frame, gallery_rt, "\n".join(rt_logs)
+        return last_output_rt if last_output_rt is not None else frame, gallery_rt, "\n".join(rt_logs_history)
     last_time_rt = current_time
 
     # 1. Détection via Mediapipe FaceMesh
@@ -259,8 +264,14 @@ def process_realtime_detection(frame):
         last_receipt_generation_rt = time.time()
         rt_logs.append("Génération des reçus déclenchée.")
 
+    # Ajout des logs de cette frame à l'historique global
+    rt_logs_history.extend(rt_logs)
+    # Limiter l'historique aux 100 derniers messages
+    if len(rt_logs_history) > 100:
+        rt_logs_history = rt_logs_history[-100:]
+    
     last_output_rt = frame
-    return frame, gallery_rt, "\n".join(rt_logs)
+    return frame, gallery_rt, "\n".join(rt_logs_history)
 
 # ---------------------------
 # Interface Gradio – Définition des onglets
@@ -291,5 +302,5 @@ with gr.Blocks() as demo:
             download_output = gr.File(label="Fichier ZIP des reçus")
             refresh_btn.click(fn=refresh_person_ids, inputs=[], outputs=person_dropdown)
             download_btn.click(fn=download_receipts_gradio, inputs=person_dropdown, outputs=download_output)
-
+ 
 demo.launch(debug=True, share=True)
