@@ -1,0 +1,14 @@
+opencv-python
+opencv-python-headless
+numpy
+torch
+torchvision
+onnxruntime
+onnxruntime-gpu
+insightface
+retina-face
+gradio
+mediapipe
+reportlab
+facenet-pytorch
+tqdm
