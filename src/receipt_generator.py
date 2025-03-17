@@ -11,7 +11,7 @@ from datetime import datetime
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import letter
 import mediapipe as mp
- # src/helpers.py
+# src/helpers.py
 from helpers import ensure_directory_exists
 
 class ReceiptGenerator:

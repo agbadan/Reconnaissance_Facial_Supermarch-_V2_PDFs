@@ -26,6 +26,7 @@ from config import (
     DESIRED_YAW,
     ANGLE_TOLERANCE,
 )
+
 from face_saver import save_detected_face
 from utils import util  # Module de ByteTrack
 from nets import nn       # Module de ByteTrack
