@@ -11,7 +11,7 @@ from datetime import datetime
 from tqdm import tqdm
 import mediapipe as mp
 
-from utils import ensure_directory_exists
+from helpers import ensure_directory_exists
 from face_tracker import FaceTracker
 
 # --- Gestion de ByteTrack --- 

@@ -12,7 +12,7 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import letter
 import mediapipe as mp
 
-from utils import ensure_directory_exists
+from helpers import ensure_directory_exists
 
 class ReceiptGenerator:
     def __init__(self,
