@@ -8,6 +8,8 @@ import cv2
 import numpy as np
 import torch
 import mediapipe as mp
+import tempfile
+import zipfile
 
 from video_processor import VideoProcessor
 from face_database import FaceDatabase
@@ -26,7 +28,6 @@ from config import (
     DESIRED_YAW,
     ANGLE_TOLERANCE,
 )
-
 from face_saver import save_detected_face
 from utils import util  # Module de ByteTrack
 from nets import nn       # Module de ByteTrack
@@ -84,7 +85,13 @@ def process_video_gradio(video_file) -> tuple:
 def download_receipts_gradio(unique_id: str) -> str:
     zip_path = zip_receipts_for_person(unique_id, RECEIPTS_FOLDER)
     if not zip_path:
-        return f"Aucun reçu trouvé pour {unique_id}."
+        # Création d'un fichier zip temporaire contenant un message
+        temp_zip = tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
+        temp_zip.close()
+        with zipfile.ZipFile(temp_zip.name, 'w') as zf:
+            message = f"Aucun reçu trouvé pour {unique_id}."
+            zf.writestr("message.txt", message)
+        return temp_zip.name
     return zip_path
 
 # ---------------------------
@@ -116,25 +123,32 @@ face_app_rt.prepare(ctx_id=0, det_size=(640, 640))
 
 from face_tracker import FaceTracker
 face_tracker_rt = FaceTracker(similarity_threshold=SIMILARITY_THRESHOLD)
-# On partage la base persistante entre les modes
+# On partage la même base persistante que pour le mode vidéo
 face_db_rt = face_db_persistent
+
+# Variable pour limiter la fréquence d'appel à la génération des reçus
+last_receipt_generation_rt = 0
+RECEIPT_GEN_INTERVAL = 5  # en secondes
 
 def process_realtime_detection(frame):
     """
     Traite une frame de la webcam en temps réel :
       - Traite au maximum une frame par seconde.
-      - Vérifie l'orientation via Mediapipe mais, même si les conditions ne sont pas parfaitement remplies,
-        le pipeline YOLO/ByteTrack est exécuté.
-      - Pour chaque visage détecté, extrait uniquement la région du visage, réalise la reconnaissance via InsightFace,
+      - Vérifie l'orientation via Mediapipe.
+      - Exécute le pipeline YOLO/ByteTrack pour détecter les visages.
+      - Pour chaque visage détecté, extrait la région du visage, réalise la reconnaissance via InsightFace,
         et met à jour le tracker en utilisant la base partagée.
-      - Le visage est ensuite sauvegardé via save_detected_face et ajouté à la galerie.
-    Retourne un tuple (frame annotée, galerie des visages détectés).
+      - Le visage est sauvegardé via save_detected_face et ajouté à la galerie.
+      - Périodiquement, déclenche la génération des reçus.
+      - Des logs détaillés sont générés pour informer l'utilisateur.
+    Retourne un tuple (frame annotée, galerie des visages détectés, logs de détection).
     """
-    global last_time_rt, last_output_rt, gallery_rt, face_db_rt
+    global last_time_rt, last_output_rt, gallery_rt, face_db_rt, last_receipt_generation_rt
+    rt_logs = []  # liste des logs pour cette frame
     frame = frame.copy()
     current_time = time.time()
     if current_time - last_time_rt < 1:
-        return last_output_rt if last_output_rt is not None else frame, gallery_rt
+        return last_output_rt if last_output_rt is not None else frame, gallery_rt, "\n".join(rt_logs)
     last_time_rt = current_time
 
     # 1. Détection via Mediapipe FaceMesh
@@ -157,15 +171,15 @@ def process_realtime_detection(frame):
             roll = np.degrees(np.arctan2(right_eye[1] - left_eye[1], right_eye[0] - left_eye[0]))
             pitch = np.degrees(np.arctan2(chin[1] - nose_tip[1], chin[2] - nose_tip[2]))
             yaw = np.degrees(np.arctan2(nose_tip[0] - chin[0], nose_tip[2] - chin[2]))
+            rt_logs.append(f"Angles: roll={roll:.2f}, pitch={pitch:.2f}, yaw={yaw:.2f}")
             if (abs(roll - DESIRED_ROLL) > ANGLE_TOLERANCE or
                 abs(pitch - DESIRED_PITCH) > ANGLE_TOLERANCE or
                 abs(yaw - DESIRED_YAW) > ANGLE_TOLERANCE):
-                logging.info("Angles non optimaux, mais on continue le traitement.")
-                # On ne retourne pas ici pour permettre l'exécution du pipeline YOLO.
+                rt_logs.append("Angles non optimaux, mais on continue le traitement.")
         else:
-            logging.info("Nombre insuffisant de landmarks, on continue quand même.")
+            rt_logs.append("Nombre insuffisant de landmarks, on continue.")
     else:
-        logging.info("Aucun landmark détecté, on continue.")
+        rt_logs.append("Aucun landmark détecté, on continue.")
 
     # 2. Prétraitement pour YOLO et détection avec ByteTrack
     image = frame.copy()
@@ -202,7 +216,7 @@ def process_realtime_detection(frame):
         obj_classes = outputs_bt[:, 6]
         for i, box in enumerate(boxes_bt):
             if int(obj_classes[i]) != 0:
-                continue  # On ne traite que la classe "personne"
+                continue  # Ne traiter que la classe "personne"
             x1, y1, x2, y2 = list(map(int, box))
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
             # Extraction du face crop uniquement
@@ -211,23 +225,42 @@ def process_realtime_detection(frame):
                 try:
                     detected_faces = face_app_rt.get(face_roi)
                 except Exception as e:
-                    logging.error(f"Erreur lors de l'analyse du visage : {e}")
+                    rt_logs.append(f"Erreur lors de l'analyse du visage : {e}")
                     detected_faces = []
                 if detected_faces:
                     # Mise à jour du tracker avec la base persistante
                     _, logs_tracker = face_tracker_rt.update(detected_faces, int(outputs_bt[i, 4]), face_db_rt, "", 0)
+                    for log in logs_tracker:
+                        rt_logs.append(log)
                     unique_id = detected_faces[0].assigned_label
+                    rt_logs.append(f"Visage reconnu : {unique_id}")
                 else:
                     unique_id = "unknown"
-                # Sauvegarder uniquement la région du visage via la fonction commune
+                    rt_logs.append("Aucun visage reconnu, identifiant 'unknown'")
+                # Sauvegarder uniquement la région du visage
                 filename, save_path = save_detected_face(face_roi, unique_id, FACE_SAVE_FOLDER)
-                logging.info(f"Face saved: {filename} at {save_path}")
+                rt_logs.append(f"Face saved: {filename} at {save_path}")
                 gallery_rt.append(face_roi)
                 if len(gallery_rt) > 10:
                     gallery_rt.pop(0)
     
+    # Appel périodique à la génération des reçus (toutes les 5 secondes)
+    if time.time() - last_receipt_generation_rt > RECEIPT_GEN_INTERVAL:
+        receipt_gen = ReceiptGenerator(
+            supermarket_name="Supermarché le champion",
+            supermarket_address="Agoe Demakpoe",
+            supermarket_tel="+228 99520033",
+            face_save_folder=FACE_SAVE_FOLDER,
+            receipts_folder=RECEIPTS_FOLDER,
+            default_log=DEFAULT_LOG_ACHAT,
+            receipt_number_file=RECEIPT_NUMBER_FILE
+        )
+        receipt_gen.process_all_new_receipts()
+        last_receipt_generation_rt = time.time()
+        rt_logs.append("Génération des reçus déclenchée.")
+
     last_output_rt = frame
-    return frame, gallery_rt
+    return frame, gallery_rt, "\n".join(rt_logs)
 
 # ---------------------------
 # Interface Gradio – Définition des onglets
@@ -247,9 +280,10 @@ with gr.Blocks() as demo:
         with gr.TabItem("Détection en temps réel"):
             realtime_img = gr.Image(sources="webcam", streaming=True, label="Flux en temps réel")
             realtime_gallery = gr.Gallery(label="Galerie des visages détectés")
+            rt_logs_output = gr.Textbox(label="Logs détection temps réel", lines=8)
             realtime_img.stream(fn=process_realtime_detection,
                                 inputs=realtime_img,
-                                outputs=[realtime_img, realtime_gallery])
+                                outputs=[realtime_img, realtime_gallery, rt_logs_output])
         with gr.TabItem("Télécharger Recus"):
             person_dropdown = gr.Dropdown(choices=get_person_ids(), label="Sélectionnez un identifiant", interactive=True)
             refresh_btn = gr.Button("Rafraîchir la liste")
