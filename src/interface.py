@@ -11,11 +11,13 @@ import mediapipe as mp
 import tempfile
 import zipfile
 
+
 from video_processor import VideoProcessor
 from face_database import FaceDatabase
 from receipt_generator import ReceiptGenerator, zip_receipts_for_person
 from config import (
     DATABASE_PATH,
+    TORCH_WEIGHT_PATH,
     FACE_SAVE_FOLDER,
     RECEIPTS_FOLDER,
     DEFAULT_LOG_ACHAT,
@@ -108,7 +110,7 @@ face_mesh_rt = mp_face_mesh_rt.FaceMesh(
 )
 
 # Chargement du modèle YOLO pour le temps réel et initialisation de ByteTrack
-model_rt = torch.load('./weights/v8_n.pt', map_location='cuda')['model'].float()
+model_rt = torch.load(TORCH_WEIGHT_PATH, map_location='cuda')['model'].float()
 model_rt.eval()
 model_rt.half()
 bytetrack_rt = nn.BYTETracker(30)  # On fixe 30 fps pour ByteTrack
@@ -293,7 +295,7 @@ with gr.Blocks() as demo:
                               inputs=video_input,
                               outputs=[logs_output, gallery_output, updated_dropdown])
         with gr.TabItem("Détection en temps réel"):
-            realtime_img = gr.Image(source="webcam", streaming=True, label="Flux en temps réel")
+            realtime_img = gr.Image(sources="webcam", streaming=True, label="Flux en temps réel")
             realtime_gallery = gr.Gallery(label="Galerie des visages détectés")
             rt_logs_output = gr.Textbox(label="Logs détection temps réel", lines=8)
             realtime_img.stream(fn=process_realtime_detection,

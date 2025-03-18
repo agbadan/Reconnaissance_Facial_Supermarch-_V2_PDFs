@@ -15,10 +15,14 @@ from face_saver import save_detected_face
 from helpers import ensure_directory_exists
 from face_tracker import FaceTracker
 
+from config import (
+    TORCH_WEIGHT_PATH,
+    BYTETRACK_PATH )
+
 # --- Gestion de ByteTrack --- 
 # Ajout du dossier ByteTrack dans sys.path pour accéder aux modules (nets, utils, etc.)
 import sys
-bytrack_path = os.path.join(os.getcwd(), "/content/Reconnaissance_Facial_Supermarch-_V2_PDFs/ByteTrack")
+bytrack_path = os.path.join(os.getcwd(), BYTETRACK_PATH)
 if bytrack_path not in sys.path:
     sys.path.append(bytrack_path)
 
@@ -57,7 +61,7 @@ class VideoProcessor:
         self.candidates_by_person = {}
 
         # Chargement du modèle YOLO
-        self.model = torch.load('/content/Reconnaissance_Facial_Supermarch-_V2_PDFs/ByteTrack/weights/v8_n.pt', map_location='cuda')['model'].float()
+        self.model = torch.load(TORCH_WEIGHT_PATH, map_location='cuda')['model'].float()
         self.model.eval()
         self.model.half()
 

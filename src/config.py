@@ -2,6 +2,13 @@
 
 import os
 
+#Chemin vers ByteTrack
+BYTETRACK_PATH = os.path.join(os.getcwd(), "/content/drive/MyDrive/Reconnaissance_Facial_Supermarch-_V2_PDFs/ByteTrack/")
+
+
+#Poids de Bytetrack
+TORCH_WEIGHT_PATH = os.path.join(os.getcwd(), "/content/drive/MyDrive/Reconnaissance_Facial_Supermarch-_V2_PDFs/ByteTrack/weights/", "v8_n.pt")
+
 # Chemins et configurations
 DATABASE_PATH = os.path.join(os.getcwd(), "data", "faces_db.pkl")
 FACE_SAVE_FOLDER = os.path.join(os.getcwd(), "data", "saved_faces")
@@ -17,4 +24,4 @@ DETECTION_SIZE = 640
 DESIRED_ROLL = -0.84
 DESIRED_PITCH = 89.97
 DESIRED_YAW = -91.44
-ANGLE_TOLERANCE = 10.0
+ANGLE_TOLERANCE = 20.0
