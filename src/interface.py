@@ -1,5 +1,3 @@
-# src/interface.py
-
 import gradio as gr
 import os
 import logging
@@ -39,7 +37,6 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 # Création d'une instance unique de la base persistante
 # ---------------------------
 face_db_obj = FaceDatabase(DATABASE_PATH)
-# Cette instance sera utilisée pour les mises à jour en temps réel et lors de l'upload
 face_db_shared = face_db_obj.faces_db
 
 # ---------------------------
@@ -56,7 +53,6 @@ def refresh_person_ids() -> gr.update:
 
 def process_video_gradio(video_file) -> tuple:
     video_path = video_file.name if hasattr(video_file, "name") else video_file
-    # Utilisation de la même instance de base persistante
     face_db = face_db_shared
 
     config = {"SIMILARITY_THRESHOLD": SIMILARITY_THRESHOLD}
@@ -66,11 +62,9 @@ def process_video_gradio(video_file) -> tuple:
     )
     logs_list, gallery = processor.process(face_db)
 
-    # Mise à jour et sauvegarde de la base persistante
     face_db_obj.faces_db = face_db
     face_db_obj.save()
 
-    # Génération des reçus pour chaque visage détecté
     receipt_gen = ReceiptGenerator(
         supermarket_name="Supermarché le champion",
         supermarket_address="Agoe Demakpoe",
@@ -88,7 +82,6 @@ def process_video_gradio(video_file) -> tuple:
 def download_receipts_gradio(unique_id: str) -> str:
     zip_path = zip_receipts_for_person(unique_id, RECEIPTS_FOLDER)
     if not zip_path:
-        # Création d'un fichier zip temporaire contenant un message
         temp_zip = tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
         temp_zip.close()
         with zipfile.ZipFile(temp_zip.name, 'w') as zf:
@@ -98,9 +91,8 @@ def download_receipts_gradio(unique_id: str) -> str:
     return zip_path
 
 # ---------------------------
-# Détection en temps réel via webcam
+# Détection en temps réel via webcam (local)
 # ---------------------------
-# Initialisation de Mediapipe FaceMesh pour le temps réel
 mp_face_mesh_rt = mp.solutions.face_mesh
 face_mesh_rt = mp_face_mesh_rt.FaceMesh(
     static_image_mode=True,
@@ -108,57 +100,44 @@ face_mesh_rt = mp_face_mesh_rt.FaceMesh(
     min_detection_confidence=0.5
 )
 
-# Chargement du modèle YOLO pour le temps réel et initialisation de ByteTrack
 model_rt = torch.load(TORCH_WEIGHT_PATH, map_location='cuda')['model'].float()
 model_rt.eval()
 model_rt.half()
-bytetrack_rt = nn.BYTETracker(30)  # On fixe 30 fps pour ByteTrack
+bytetrack_rt = nn.BYTETracker(30)
 
-# Variables globales pour la détection en temps réel
 last_time_rt = 0
 last_output_rt = None
-gallery_rt = []  # Galerie locale pour stocker les visages détectés
+gallery_rt = []
 
-# Pour la reconnaissance en temps réel, on charge InsightFace et instancie le FaceTracker
 from insightface.app import FaceAnalysis
 face_app_rt = FaceAnalysis(name="buffalo_l", providers=["CUDAExecutionProvider"])
 face_app_rt.prepare(ctx_id=0, det_size=(640, 640))
 
 from face_tracker import FaceTracker
-# Utilisation de la même base persistante partagée
 face_tracker_rt = FaceTracker(similarity_threshold=SIMILARITY_THRESHOLD)
-# On assigne la référence partagée à l'instance du tracker
 face_db_rt = face_db_shared
 
-# Variable pour limiter la fréquence d'appel à la génération des reçus
 last_receipt_generation_rt = 0
-RECEIPT_GEN_INTERVAL = 5  # en secondes
+RECEIPT_GEN_INTERVAL = 5
 
-# Historique persistant des logs en temps réel
 rt_logs_history = []
 
 def process_realtime_detection(frame):
     """
-    Traite une frame de la webcam en temps réel :
-      - Traite au maximum une frame par seconde.
-      - Vérifie l'orientation via Mediapipe.
-      - Exécute le pipeline YOLO/ByteTrack pour détecter les visages.
-      - Pour chaque visage détecté, extrait la région du visage, réalise la reconnaissance via InsightFace,
-        et met à jour le tracker en utilisant la base partagée.
-      - Le visage est sauvegardé via save_detected_face et ajouté à la galerie.
-      - Périodiquement, déclenche la génération des reçus.
-      - Les logs détaillés sont ajoutés à un historique persistant pour l'affichage.
-    Retourne un tuple (frame annotée, galerie des visages détectés, logs persistant).
+    Traite une frame locale en temps réel et renvoie l'image annotée (RGB), la galerie des visages détectés et les logs.
     """
     global last_time_rt, last_output_rt, gallery_rt, face_db_rt, last_receipt_generation_rt, rt_logs_history
-    rt_logs = []  # logs de cette frame
+    rt_logs = []
+    # Conversion de l'image d'entrée de RGB (format Gradio) en BGR (format OpenCV)
+    frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
     frame = frame.copy()
     current_time = time.time()
     if current_time - last_time_rt < 1:
-        return last_output_rt if last_output_rt is not None else frame, gallery_rt, "\n".join(rt_logs_history)
+        last_output_rgb = cv2.cvtColor(last_output_rt, cv2.COLOR_BGR2RGB) if last_output_rt is not None else None
+        return last_output_rgb, gallery_rt, "\n".join(rt_logs_history)
     last_time_rt = current_time
 
-    # 1. Détection via Mediapipe FaceMesh
+    # Détection avec Mediapipe (Mediapipe attend du RGB, on convertit donc temporairement)
     frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     results = face_mesh_rt.process(frame_rgb)
     if results.multi_face_landmarks:
@@ -188,7 +167,7 @@ def process_realtime_detection(frame):
     else:
         rt_logs.append("Aucun landmark détecté, on continue.")
 
-    # 2. Prétraitement pour YOLO et détection avec ByteTrack
+    # Détection avec YOLO / ByteTrack
     image = frame.copy()
     original_shape = image.shape[:2]
     r = DETECTION_SIZE / max(original_shape)
@@ -223,11 +202,9 @@ def process_realtime_detection(frame):
         obj_classes = outputs_bt[:, 6]
         for i, box in enumerate(boxes_bt):
             if int(obj_classes[i]) != 0:
-                continue  # Ne traiter que la classe "personne"
+                continue
             x1, y1, x2, y2 = list(map(int, box))
-            # Dessiner le rectangle
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            # Extraction du face crop
             face_roi = frame[y1:y2, x1:x2]
             if face_roi.size != 0:
                 try:
@@ -236,7 +213,6 @@ def process_realtime_detection(frame):
                     rt_logs.append(f"Erreur lors de l'analyse du visage : {e}")
                     detected_faces = []
                 if detected_faces:
-                    # Mise à jour du tracker avec la base partagée
                     _, logs_tracker = face_tracker_rt.update(detected_faces, int(outputs_bt[i, 4]), face_db_rt, "", 0)
                     for log in logs_tracker:
                         rt_logs.append(log)
@@ -245,20 +221,18 @@ def process_realtime_detection(frame):
                 else:
                     unique_id = "unknown"
                     rt_logs.append("Aucun visage reconnu, identifiant 'unknown'")
-                # Sauvegarde de la région du visage et mise à jour de la base persistante
                 filename, save_path = save_detected_face(face_roi, unique_id, FACE_SAVE_FOLDER)
                 rt_logs.append(f"Face saved: {filename} at {save_path}")
-                gallery_rt.append(face_roi)
+                # Convertir le visage en RGB avant de l'ajouter à la galerie
+                face_roi_rgb = cv2.cvtColor(face_roi, cv2.COLOR_BGR2RGB)
+                gallery_rt.append(face_roi_rgb)
                 if len(gallery_rt) > 10:
                     gallery_rt.pop(0)
-                # Synchronisation immédiate de la base partagée
                 face_db_obj.faces_db = face_db_rt
                 face_db_obj.save()
-                # Affichage du nom de la personne sur le flux (texte en haut du rectangle)
                 cv2.putText(frame, unique_id, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX,
                             0.8, (0, 255, 0), 2, cv2.LINE_AA)
     
-    # Appel périodique à la génération des reçus (toutes les 5 secondes)
     if time.time() - last_receipt_generation_rt > RECEIPT_GEN_INTERVAL:
         receipt_gen = ReceiptGenerator(
             supermarket_name="Supermarché le champion",
@@ -273,20 +247,48 @@ def process_realtime_detection(frame):
         last_receipt_generation_rt = time.time()
         rt_logs.append("Génération des reçus déclenchée.")
 
-    # Ajout des logs de cette frame à l'historique global
     rt_logs_history.extend(rt_logs)
-    # Limiter l'historique aux 100 derniers messages
     if len(rt_logs_history) > 100:
         rt_logs_history = rt_logs_history[-100:]
     
     last_output_rt = frame
-    return frame, gallery_rt, "\n".join(rt_logs_history)
+    # Conversion finale en RGB pour l'affichage dans Gradio
+    output_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    return output_rgb, gallery_rt, "\n".join(rt_logs_history)
+
+# ---------------------------
+# Détection via flux distant (URL) – fonction génératrice
+# ---------------------------
+def stream_remote_detection(url):
+    cap = cv2.VideoCapture(url)
+    frame_count = 0
+    last_output = None
+    if not cap.isOpened():
+        yield None, [], f"Erreur : Impossible d'ouvrir le flux à l'URL {url}"
+    while cap.isOpened():
+        # Vider le tampon pour ne traiter que la frame la plus récente
+        for _ in range(5):
+            cap.grab()
+        ret, frame = cap.read()
+        if not ret:
+            yield None, [], "Fin du flux ou erreur de lecture."
+            break
+        frame_count += 1
+        # Ne traiter qu'une frame sur 30
+        if frame_count % 30 != 0:
+            if last_output is not None:
+                yield last_output
+            continue
+        processed_frame, gallery, logs = process_realtime_detection(frame)
+        last_output = (processed_frame, gallery, logs)
+        yield processed_frame, gallery, logs
+    cap.release()
 
 # ---------------------------
 # Interface Gradio – Définition des onglets
 # ---------------------------
 with gr.Blocks() as demo:
-    gr.Markdown("## Reconnaissance Faciale – Traitement Vidéo, Détection en Temps Réel, Génération Instantanée de Reçus et Téléchargement")
+    gr.Markdown("## Reconnaissance Faciale – Traitement Vidéo, Détection en Temps Réel, Détection via URL, et Téléchargement de Recus")
     with gr.Tabs():
         with gr.TabItem("Traitement Vidéo"):
             video_input = gr.Video(label="Uploader votre vidéo")
@@ -304,6 +306,15 @@ with gr.Blocks() as demo:
             realtime_img.stream(fn=process_realtime_detection,
                                 inputs=realtime_img,
                                 outputs=[realtime_img, realtime_gallery, rt_logs_output])
+        with gr.TabItem("Détection via URL"):
+            url_input = gr.Textbox(label="Entrez l'URL du flux distant", placeholder="https://2861-102-64-160-170.ngrok-free.app/video")
+            remote_img = gr.Image(label="Flux distant traité", streaming=True)
+            remote_gallery = gr.Gallery(label="Galerie des visages détectés")
+            remote_logs = gr.Textbox(label="Logs de détection distante", lines=8)
+            start_btn = gr.Button("Lancer la détection")
+            start_btn.click(fn=stream_remote_detection,
+                            inputs=url_input,
+                            outputs=[remote_img, remote_gallery, remote_logs])
         with gr.TabItem("Télécharger Recus"):
             person_dropdown = gr.Dropdown(choices=get_person_ids(), label="Sélectionnez un identifiant", interactive=True)
             refresh_btn = gr.Button("Rafraîchir la liste")
