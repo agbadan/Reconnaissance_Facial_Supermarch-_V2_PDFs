@@ -11,7 +11,6 @@ import mediapipe as mp
 import tempfile
 import zipfile
 
-
 from video_processor import VideoProcessor
 from face_database import FaceDatabase
 from receipt_generator import ReceiptGenerator, zip_receipts_for_person
@@ -177,7 +176,7 @@ def process_realtime_detection(frame):
             left_eye = landmarks[33]
             right_eye = landmarks[263]
             roll = np.degrees(np.arctan2(right_eye[1] - left_eye[1], right_eye[0] - left_eye[0]))
-            pitch = np.degrees(np.arctan2(chin[1] - nose_tip[1], chin[2] - nose_tip[2]))
+            pitch = np.degrees(np.arctan2(chin[1] - nose_tip[1], chin[2] - nose_tip[1]))
             yaw = np.degrees(np.arctan2(nose_tip[0] - chin[0], nose_tip[2] - chin[2]))
             rt_logs.append(f"Angles: roll={roll:.2f}, pitch={pitch:.2f}, yaw={yaw:.2f}")
             if (abs(roll - DESIRED_ROLL) > ANGLE_TOLERANCE or
@@ -226,6 +225,7 @@ def process_realtime_detection(frame):
             if int(obj_classes[i]) != 0:
                 continue  # Ne traiter que la classe "personne"
             x1, y1, x2, y2 = list(map(int, box))
+            # Dessiner le rectangle
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
             # Extraction du face crop
             face_roi = frame[y1:y2, x1:x2]
@@ -254,6 +254,9 @@ def process_realtime_detection(frame):
                 # Synchronisation immédiate de la base partagée
                 face_db_obj.faces_db = face_db_rt
                 face_db_obj.save()
+                # Affichage du nom de la personne sur le flux (texte en haut du rectangle)
+                cv2.putText(frame, unique_id, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX,
+                            0.8, (0, 255, 0), 2, cv2.LINE_AA)
     
     # Appel périodique à la génération des reçus (toutes les 5 secondes)
     if time.time() - last_receipt_generation_rt > RECEIPT_GEN_INTERVAL:
